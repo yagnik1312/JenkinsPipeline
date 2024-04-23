@@ -1,0 +1,90 @@
+def pipelineScript
+// above pipelineScript variable used to store pipelineScipt.groovy file.
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_NAME', defaultValue: 'imagename', description: 'The name of the Docker image.')
+        string(name: 'DOCKER_REPO', defaultValue: 'reponame', description: 'The name of the repository where the Docker image is going to be pushed.')
+        string(name: 'CONTAINER_NAME', defaultValue: 'imageContainer', description: 'The name of the docker cantainer')
+        string(name: 'NETWORK', defaultValue: 'imageNetwork', description: 'The name of the network')
+        string(name: 'HOST_PORT', defaultValue: 'hostPort', description: 'The port number for the host that is going to be redirected to the container port.')
+        string(name: 'CONTAINER_PORT', defaultValue: 'containerPort', description: 'The port number for the container')
+        credentials(name: 'DOCKERHUB_CRED', defaultValue: 'docker-credential', description: 'The credentials for Docker Hub, where Jenkins pushes Docker images.')
+        // Note: To run CD Pipeline, you need to create below named parameters.
+        // name :pipelineScriptRepo, type:string, description: 'The path of the repository that contains the pipeline script.'
+        // name of pipe line script should be "pipelineScripts".
+    }
+
+    stages {
+        stage('cleanws') {
+            steps {
+                script {
+                    cleanWs()
+                }
+            }
+        }
+
+        stage('Checkout to pipeline scripts') {
+            steps {
+                    checkout([$class: 'GitSCM',
+                              branches: [[name: 'master']],
+                              doGenerateSubmoduleConfigurations: false,
+                              extensions: [[$class: 'SparseCheckoutPaths', sparseCheckoutPaths: [[path: 'pipelineScripts.groovy']]]],
+                              userRemoteConfigs: [[url: "$pipelineScriptRepo"]]])
+            }
+        }
+
+        stage('load pipeline helper scripts') {
+            steps {
+                script {
+                    pipelineScript = load './pipelineScripts.groovy'
+                }
+            }
+        }
+
+        stage('pull docker image') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "$DOCKERHUB_CRED", usernameVariable: 'DOCKERHUB_CRED_USR', passwordVariable: 'DOCKERHUB_CRED_PSW')]) {
+                        pipelineScript.pullDockerImage(DOCKERHUB_CRED_USR, DOCKERHUB_CRED_PSW, DOCKER_REPO, IMAGE_NAME)
+                    }
+                }
+            }
+        }
+
+        stage('delete old docker container') {
+            steps {
+                script {
+                    // check if container exist or not. if not then do not try to delete it.
+                    String containerExists = "docker ps -a -f name=$CONTAINER_NAME| findstr $CONTAINER_NAME"
+                    if (containerExists.contains('Error')) {
+                        echo "Container ${CONTAINER_NAME} does not exist."
+                    } else {
+                        bat "docker rm -f ${CONTAINER_NAME}"
+                        echo "Container ${CONTAINER_NAME} removed."
+                    }
+                }
+            }
+        }
+
+        // Create network if not exist.
+        stage('create network') {
+            steps {
+                script {
+                    pipelineScript.createNetwork(NETWORK)
+                }
+            }
+        }
+
+        stage('run docker image') {
+            steps {
+                // HOST_PORT and CONTAINER_PORT is in String formate so convert into integer using toInteger() method.
+                script {
+                    pipelineScript.runDockerContainer(CONTAINER_NAME, HOST_PORT.toInteger(), CONTAINER_PORT.toInteger(), NETWORK, DOCKER_REPO, IMAGE_NAME)
+                }
+            }
+        }
+    }
+}

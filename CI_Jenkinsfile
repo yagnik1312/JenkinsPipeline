@@ -1,0 +1,79 @@
+def pipelineScript
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'imageVersion', defaultValue: '1', description: 'image version')
+        // Note: To run CI and CD Pipeline, you need to create below named parameters.
+        // name :repositoryUrl, type:string, description: 'The repository URL from which Jenkins takes the code for the build.'
+        // name :repositoryBranch, type:string, description: 'The repository branch from which Jenkins takes the code for the build.'
+        // name :IMAGE_NAME, type:string, description: 'The name of the Docker image.'
+        // name :DOCKER_REPO, type:string, description: 'The name of the repository where the Docker image is going to be pushed.'
+        // name :CD_PIPELINE_NAME, type:string, description: 'TThe name of the Continuous Delivery (CD) pipeline that will be triggered when the Continuous Integration (CI) pipeline ends.'
+        // name :CONTAINER_NAME, type:string, description: 'The name of the docker container.'
+        // name :NETWORK, type:string, description: 'The name of the network.'
+        // name :HOST_PORT, type:string, description: 'The port number for the host that is going to be redirected to the container port.'
+        // name :CONTAINER_PORT, type:string, description: 'The port number for the container.'
+        // name :DOCKERHUB_CRED, type:credentials, description: 'The credentials for Docker Hub, where Jenkins pushes Docker images.'
+        // name :gitCredential, type:credentials, description: 'The credentials of git,from where jenkins checkout repository.'
+
+        // Note: you can use parameters as "params.ParameterName" or direct "ParameterName"
+    }
+
+    stages {
+        stage('cleanws') {
+            steps {
+                script {
+                    cleanWs()
+                }
+            }
+        }
+        stage('Checkout to restaurant backend') {
+            tools { git 'Default' }
+            steps {
+                git branch: "$repositoryBranch", changelog: false, credentialsId: "$gitCredential", poll: false, url: "$repositoryUrl"
+            }
+        }
+
+        stage('load pipeline helper scripts') {
+            steps {
+                script {
+                    pipelineScript = load './pipelineScripts.groovy'
+                }
+            }
+        }
+
+        stage('build docker image') {
+            steps {
+                    script {
+                        pipelineScript.buildDockerImage(DOCKER_REPO, IMAGE_NAME, imageVersion)
+                    }
+            }
+        }
+
+        stage('push docker image to docker hub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "$DOCKERHUB_CRED", usernameVariable: 'DOCKERHUB_CRED_USR', passwordVariable: 'DOCKERHUB_CRED_PSW')]) {
+                        pipelineScript.pushDockerImage(DOCKERHUB_CRED_USR, DOCKERHUB_CRED_PSW, DOCKER_REPO, IMAGE_NAME)
+                    }
+                }
+            }
+        }
+
+        stage('trigger cd pipeline') {
+            steps {
+                build job: CD_PIPELINE_NAME, parameters: [
+                    string(name: 'IMAGE_NAME', value: IMAGE_NAME),
+                    string(name: 'DOCKER_REPO', value: DOCKER_REPO),
+                    string(name: 'CONTAINER_NAME', value: CONTAINER_NAME),
+                    string(name: 'NETWORK', value: NETWORK),
+                    string(name: 'HOST_PORT', value: HOST_PORT),
+                    string(name: 'CONTAINER_PORT', value: CONTAINER_PORT),
+                    string(name: 'DOCKERHUB_CRED', value: DOCKERHUB_CRED),
+                ],wait: true
+            }
+        }
+    }
+}
